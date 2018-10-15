@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -7,6 +8,9 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ExplicitNamespaces #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Main where
 
@@ -14,8 +18,8 @@ import Prelude hiding (lookup)
 import Options.Generic (Generic, ParseRecord, Unwrapped, Wrapped, unwrapRecord, (:::), type (<?>)(..))
 import Control.Monad (join, liftM, foldM)
 import System.IO (withFile, hPutStr, IOMode(..), readFile)
-import System.Random (random, randomR, getStdGen, randomIO, randomRIO, getStdRandom, newStdGen, RandomGen)
-import Data.List (unfoldr, nub)
+import System.Random (getStdGen, getStdRandom, newStdGen, RandomGen, mkStdGen, StdGen)
+import Data.List (unfoldr, nub, mapAccumL, intercalate)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
@@ -26,19 +30,33 @@ import VectorShuffling.Immutable (shuffle)
 import Control.Monad.IO.Class (liftIO)
 import Text.Printf (printf)
 import Debug.Trace (traceShow, traceShowId)
+import Math.Combinatorics.Exact.Binomial (choose)
+import Control.Monad.Loops
+import Control.Monad.Log
+import Control.Monad.State.Class (MonadState(get, put))
+import Control.Monad.Reader.Class
+import Control.Monad.Reader (ReaderT)
+import Control.Monad.IO.Class (MonadIO(liftIO))
+import Data.Tuple (swap)
+import Control.Monad.Reader
+import Control.Monad.Identity
+import Control.Monad.State
+import Control.Monad.Writer
+import Control.Monad.Random
+import Control.Monad.RWS
+import Control.Lens hiding (Wrapped, Unwrapped)
 
 
-data Parameters w = Train { input :: w ::: String <?> "Input file"
+data Parameters w = Train { training :: w ::: String <?> "Training data file"
                           , lineCount :: w ::: Int <?> "Number of lines to read"
                           , iterations :: w ::: Int <?> "Number of sampling iterations"                          
-                          , alpha :: w ::: Double <?> "Per-decision concentration parameter (0.1)"
-                          --, mu :: w ::: Double <?> "Base distribution"
-                          --, alphaRO :: w ::: Double <?> "Per-outcome concentration parameter (0.1 / |O|)?"
+                          , alphaParam :: w ::: Double <?> "Per-decision concentration parameter (0.1)"
+                          , stopParam :: w ::: Double <?> "Probability to stop generating characters when drawing an unseen word"
+                          , modelOutput :: w ::: String <?> "Output file for scores"                          
                           }
                   | Apply { modelFile :: w ::: String <?> "Model file (output or input, depending on whether training or testing, respectively)"
-                          , n :: w ::: Int <?> "Maximum context size (mutually exclusive with --dev, this option takes precedence)"                          
-                          , test :: w ::: String <?> "Test file"
-                          , scoresFile :: w ::: String <?> "Output file for scores"
+                          , testing :: w ::: String <?> "Testing data file"
+                          , labeledOutput :: w ::: String <?> "Output file for scores"
                           }
   deriving (Generic)                              
 
@@ -47,40 +65,39 @@ instance ParseRecord (Parameters Wrapped)
 deriving instance Show (Parameters Unwrapped)
 
 
-data Location a = Location { value :: a
-                           , morphFinal :: Bool
-                           , static :: Bool
-                           , offset :: Int
-                           } deriving (Show)
-
+data Location a = Location { _value :: a
+                           , _morphFinal :: Bool
+                           , _static :: Bool
+                           , _offset :: Int
+                           } deriving (Show, Read)
 
 type Counts a = Map [a] Int
-
 type Lookup a = Map [a] (Set Int)
+type Locations a = [Location a]
 
-type State a = [Location a]
---type Sequence a = Vector a
---type Boundaries = Vector Bool
---type Spaces = Vector Bool
+data SamplingState a = SamplingState { _counts :: Counts a
+                                     , _locations :: Locations a
+                                     , _startLookup :: Lookup a
+                                     , _endLookup :: Lookup a
+                                     } deriving (Show, Read)
+
+makeLenses ''SamplingState
+
+data Params = Params { _alpha :: Double
+                     , _stop :: Double
+                     } deriving (Show, Read)
+
+defaultParams = Params 0.1 0.1
+makeLenses ''Params
+
+type Sampler elem = RandT StdGen (StateT (SamplingState elem) (ReaderT Params (LoggingT (WithSeverity String) IO)))
+instance (MonadLog (WithSeverity String) m) => MonadLog (WithSeverity String) (RandT g m)
 
 
-showLocations :: [Location Char] -> String
+showLocations :: [Location Char] -> [Char]
 showLocations ls = concat toks
   where
-    toks = map (\x -> if morphFinal x && static x then [value x, '+', ' '] else if morphFinal x then [value x, '|', ' '] else [value x, ' ', ' ']) ls
-
-
--- data Site a = Site { before :: [a]
---                    , after :: [a]
---                    , boundary :: Bool
---                    } deriving (Show, Eq, Ord)
-
-
--- comp :: (Eq a) => Site a -> Site a -> Bool
--- comp x y = x' == y'
---   where
---     x' = (before x) ++ (after x)
---     y' = (before y) ++ (after y)    
+    toks = map (\x -> if _morphFinal x && _static x then [_value x, '+', ' '] else if _morphFinal x then [_value x, '|', ' '] else [_value x, ' ', ' ']) ls
 
 
 sequenceToLocations :: [a] -> [Location a]
@@ -94,121 +111,64 @@ sequenceToLocations xs = nonFinal ++ [final]
 
 -- | Switch each potential morpheme boundary (i.e. intra-word indices) to
 --   True or False, uniformly at random
-randomizeLocations :: [Location a] -> IO [Location a]
-randomizeLocations xs = do
-  g <- newStdGen
-  bs <- sequence $ [if static == True then return True else randomIO :: IO Bool | Location{..} <- xs]
-  let xs' = [x { morphFinal=b } | (x, b) <- zip xs bs]
-  return xs'
-
-
--- oneSegmentation :: [Location a] -> Maybe ([a], [Location a])
--- oneSegmentation [] = Nothing
--- oneSegmentation xs = Just (morph, rest)
---   where
---     (pref, f:rest) = span (\i -> static i == False) xs
---     morph = map value (pref ++ [f])
-
-
---segmentations :: (Show a) => [Location a] -> [[a]]
---segmentations = unfoldr oneSegmentation
-
-
--- indexToSite :: (Show a) => [Location a] -> Int -> Site a
--- indexToSite ls i = site
---   where
---     (before, after) = splitAt (i + 1) ls
---     (loc:before') = reverse before
---     b = reverse $ takeWhile (\l -> morphFinal l == False) before'    
---     (a, f:_) = span (\l -> morphFinal l == False) after
---     before'' = map value (b ++ [loc])
---     after'' = map value (a ++ [f])
---     site = Site before'' after'' (morphFinal loc)
---     --(map value (b ++ [loc] ++ a ++ [f])) (length b)
-
-
--- randomPivot :: (Show a) => [Location a] -> [Int] -> IO (Int, Site a)
--- randomPivot ls is = do
---   g <- newStdGen
---   let (i, _) = randomR (0, length is) g
---   return (i, indexToSite ls i)
-
-
--- pivotToSet :: (Show a, Eq a) => [Location a] -> Site a -> ([Int], [Int])
--- pivotToSet ls s = (pos, neg)
---   where
---     pivots = map (\i -> (i, indexToSite ls i)) [0..length ls - 2]
---     keep = map fst (filter (\(i, s') -> s `comp` s') pivots)
---     pos = [i | i <- keep, (morphFinal $ ls !! i) == True]
---     neg = [i | i <- keep, (morphFinal $ ls !! i) == False]
-
-
+randomizeLocations :: [Location a] -> StdGen -> ([Location a], StdGen)
+randomizeLocations xs g = (xs', g')
+  where
+    (g', bs) = mapAccumL (\g'' Location{..} -> if _static == True then (g'', True) else swap (random g'' :: (Bool, StdGen))) g xs
+    --[if static == True then True else (fst $ random g) :: Bool | Location{..} <- xs]
+    --bs <- sequence $ [if static == True then return True else randomIO :: IO Bool | Location{..} <- xs]
+    xs' = [x { _morphFinal=b } | (x, b) <- zip xs bs]
 
 
 -- | Initialize word counts from scratch, given sampling state
-initializeCounts :: (Ord a, Show a) => State a -> Counts a
+initializeCounts :: (Ord a, Show a) => Locations a -> Counts a
 initializeCounts ls = Map.fromListWith (+) (map (\x -> (x, 1)) words')
   where
-    words = unfoldr (\xs -> case span (\x -> morphFinal x == False) xs of
+    words = unfoldr (\xs -> case span (\x -> _morphFinal x == False) xs of
                               ([], []) -> Nothing
                               (xs', x:ys) -> Just (xs' ++ [x], ys)
                     ) ls
-    words' = map (map value) words
+    words' = map (map _value) words
 
 
 -- | Initialize word lookup from scratch, given sampling state
-initializeLookups :: (Ord a, Show a) => State a -> (Lookup a, Lookup a)
+initializeLookups :: (Ord a, Show a) => Locations a -> (Lookup a, Lookup a)
 initializeLookups ls = go ls Map.empty Map.empty []
   where
-    go (l:ls') mS mE w = case morphFinal l of
+    go (l:ls') mS mE w = case _morphFinal l of
                        False -> go ls' mS mE w'
-                       True -> go ls' (Map.insertWith (Set.union) (reverse w') (Set.singleton $ offset l - (length w + 1)) mS) (Map.insertWith (Set.union) (reverse w') (Set.singleton $ offset l) mE) []
+                       True -> go ls' (Map.insertWith (Set.union) (reverse w') (Set.singleton $ _offset l - (length w + 1)) mS) (Map.insertWith (Set.union) (reverse w') (Set.singleton $ _offset l) mE) []
       where
-        w' = value l : w
+        w' = _value l : w
     go [] mS mE w = (mS, mE)
 
 
-      --concat $ [if boundary s == True then [before s, after s] else [before s ++ after s] | s <- ss]
--- --[(indexToSite ls i, 1) | i <- [0..length ls - 2]]
-
-
---modifyCounts :: (Ord a, Show a) => (Int -> Int -> Int) -> Counts a -> Int -> Int -> [a] -> [a] -> Counts a
---modifyCounts f cs fs ss a b = cs
---   where
---     b = before s
---     a = after s
---     ba = b ++ a
---     cs' = Map.insertWith f b p cs
---     cs'' = Map.insertWith f a p cs'
---     cs''' = Map.insertWith f ba n cs''
-
-
-categorical :: [Double] -> IO Int
+categorical :: (MonadRandom m) => [Double] -> m Int
 categorical ps = do
   let s = sum ps
       ps' = map (\x -> x / s) ps
       ps'' = scanl (+) 0.0 ps'
-  v <- randomRIO (0.0, 1.0 :: Double)
-  return $ length (takeWhile (\x -> x < v) ps'') - 1
+  v <- getRandomR (0.0, 1.0 :: Double)
+  return (length (takeWhile (\x -> x < v) ps'') - 1)
 
 
-siteToSet :: State a -> Lookup a -> Int -> [Int]
+siteToSet :: Locations a -> Lookup a -> Int -> [Int]
 siteToSet st lu i = []
 
-choosePivot :: (RandomGen g) => [Int] -> g -> (Int, g)
-choosePivot ix = error "dsa"
 
 takeUntil :: (a -> Bool) -> [a] -> [a]
 takeUntil f [x] = if f x then [x] else error "Final item not a boundary!"
 takeUntil f (x:xs) = if f x then [x] else (x:takeUntil f xs)
 
-siteToWords :: State a -> Int -> ([a], [a])
-siteToWords st s = (map value a, map value b)
+
+siteToWords :: Locations a -> Int -> ([a], [a])
+siteToWords st s = (map _value a, map _value b)
   where    
     after = drop (s + 1) st
-    b = takeUntil (\x -> morphFinal x) after
+    b = takeUntil (\x -> _morphFinal x) after
     (i:before) = reverse (take (s + 1) st)
-    a = drop 1 $ reverse $ i : (takeUntil (\x -> morphFinal x) before)
+    a = drop 1 $ reverse $ i : (takeUntil (\x -> _morphFinal x) before)
+
     
 wordsToSites :: (Ord a) => Lookup a -> Lookup a -> [a] -> [a] -> ([Int], [Int])
 wordsToSites luS luE a b = (jS, splits)
@@ -218,47 +178,123 @@ wordsToSites luS luE a b = (jS, splits)
     aE = Map.findWithDefault Set.empty a luE
     bS = Map.findWithDefault Set.empty b luS
     splits = Set.toList $ Set.intersection aE bS
+
+
+oneWordProb :: (Show a, Ord a) => Counts a -> Double -> Double -> Int -> [a] -> Double
+oneWordProb counts stopProb alpha reps word = numer / denom
+  where
+    mu = ((1.0 - stopProb) ^ (length word)) * stopProb
+    total = fromIntegral $ sum $ Map.elems counts
+    count = fromIntegral $ Map.findWithDefault 0 word counts
+    numer = ((alpha * mu) + count) ^ reps
+    denom = (alpha + total) ^ reps    
+
+
+g :: (Ord a, Show a) => Counts a -> Double -> [a] -> [a] -> Double -> Int -> Int -> Double
+g counts stopProb before after alpha n m= posProb * negProb
+  where
+    beforeProb = oneWordProb counts stopProb alpha m before
+    afterProb = oneWordProb counts stopProb alpha m after
+    posProb = beforeProb * afterProb
+    negProb = oneWordProb counts stopProb alpha (n - m) (before ++ after)
     
-sample :: [Int] -> (Counts Char, Lookup Char, Lookup Char, State Char) -> Int -> IO (Counts Char, Lookup Char, Lookup Char, State Char)
-sample ix (cs, luS, luE, st) iter = do
-  print luS
-  print luE
-  printf "Current state: %s\n" $ showLocations st
-  printf "Sites        : %s\n" $ concat [(if i < 10 then " " else "") ++ (show i) ++ " "| i <- [0..length st - 1]]  
-  g <- newStdGen
-  let (i, g') = (\(a, b) -> (ix !! a, b)) $ randomR (0, length ix - 1) g
-  printf "Chose pivot: %d\n" i
-  let (a, b) = siteToWords st i
+
+dist :: (Show a, Ord a) => Counts a -> Double -> [a] -> [a] -> Double -> Int -> [Double]
+dist counts stopProb before after alpha n = [p / total | p <- unScaled]
+  where
+    combinations = [fromIntegral (n `choose` m) | m <- [0..n]]
+    gs = [g counts stopProb before after alpha n m | m <- [0..n]]
+    unScaled = map (\(x, y) -> x * y) (zip combinations gs)
+    total = sum unScaled
+    
+
+sampleSite :: (MonadIO m, Show elem, Ord elem, MonadLog (WithSeverity String) m, MonadRandom m, MonadState (SamplingState elem) m, MonadReader Params m) => Set Int -> m (Set Int)
+sampleSite ix = do
+  i <- (liftM (Set.toList ix !!) (getRandomR (0, Set.size ix - 1)))
+  Params{..} <- ask
+  SamplingState{..} <- get
+  let (a, b) = siteToWords _locations i
       c = a ++ b
-  printf "Corresponding words: %s, %s\n" a b
-  let (fullSites, splitSites) = wordsToSites luS luE a b
+      (fullSites, splitSites) = wordsToSites _startLookup _endLookup a b
       sites = fullSites ++ splitSites
-      cs' = Map.insertWith (-) c (length fullSites) cs
-      cs'' = Map.insertWith (-) a (length splitSites) cs'
-      cs''' = Map.insertWith (-) b (length splitSites) cs''
-  printf "Matching sites (full/split): %s/%s\n" (show fullSites) (show splitSites)
-  let (numPos, g'') = randomR (0, length sites) g'
-  print numPos
-  let (allIndices, g''') = shuffle (Vector.fromList sites) g''
+      
+      cs' = Map.insertWith (flip (-)) c (length fullSites) _counts
+      cs'' = Map.insertWith (flip (-)) a (length splitSites) cs'
+      cs''' = Map.insertWith (flip (-)) b (length splitSites) cs''
+      --printf "Matching sites (full/split): %s/%s\n" (show fullSites) (show splitSites)      
+      --printf "Decremented counts: %s\n" $ showCounts cs'''
+  
+      d = (dist cs''' _stop a b _alpha (length sites))
+  numPos <- categorical d
+--   --printf "Probabilities: %s\n" (show d)
+--   --printf "Setting %d/%d locations to positive\n" numPos (length sites)
+  g <- liftIO getStdGen
+  let (allIndices, _) = shuffle (Vector.fromList sites) g
       (pos, neg) = splitAt numPos (Vector.toList allIndices)
       pos' = Set.fromList pos
       neg' = Set.fromList neg
       cs'''' = Map.insertWith (+) c (length neg) cs'''
       cs''''' = Map.insertWith (+) a (length pos) cs''''
       cs'''''' = Map.insertWith (+) b (length pos) cs'''''
-      st' = [Location {value=value, morphFinal=if offset `Set.member` pos' then True else if offset `Set.member` neg' then False else morphFinal, static=static, offset=offset} | Location{..} <- st]
+      cs''''''' = Map.fromList $ [(k, v) | (k, v) <- Map.toList cs'''''', v /= 0]
+      st' = [Location {_value=_value, _morphFinal=if _offset `Set.member` pos' then True else if _offset `Set.member` neg' then False else _morphFinal, _static=_static, _offset=_offset} | Location{..} <- _locations]
+--       -- FIX!
       (luS', luE') = initializeLookups st'
-  return (cs'''''', luS', luE', st')
+  --logMessage (WithSeverity Debug (printf "  Chose pivot at %d, with %s to the left, %s to the right (%d)" i (show a) (show b) (Set.size ix)))
+  return $ ix Set.\\ (Set.fromList sites)
+
+
+sample :: (MonadIO m, MonadRandom m, (MonadReader Params) m, MonadState (SamplingState Char) m, MonadLog (WithSeverity String) m) => Int -> m ()
+sample i = do
+  logMessage (WithSeverity Informational (printf "Iteration #%d" i))
+  state <- get
+  params <- ask
+  let indices = Set.fromList [i | (l, i) <- zip (view locations state) [0..], _static l == False]
+  iterateUntilM (\s -> Set.size s == 0) sampleSite indices
+  --logMessage (WithSeverity Debug (showLocations $ view locations state))
+  return ()
+
+
+perplexity :: (MonadIO m, MonadRandom m, (MonadReader Params) m, MonadState (SamplingState Char) m, MonadLog (WithSeverity String) m) => m Double
+perplexity = return 1.0
+
+
+train :: [[Char]] -> Params -> Int -> IO (SamplingState Char)
+train sequences params iterations = do
+  gen <- getStdGen
+  let locations' = (Location '#' True True (-1)) : (concat $ map sequenceToLocations sequences)
+      locations'' = [l { _offset=i } | (i, l) <- zip [0..] locations']
+      (locations, gen') = randomizeLocations locations'' gen
+      counts = initializeCounts locations
+      (lookupS, lookupE) = initializeLookups locations
+      state = SamplingState counts locations lookupS lookupE  
+  state' <- (runLoggingT (runReaderT (execStateT (evalRandT (forM_ [1..iterations] sample) gen') state) params) (\x -> putStrLn (discardSeverity x)))
+  return state'
+
+
+apply :: Locations Char -> [[Char]] -> IO ()
+apply model sequences = do
+  let locations' = (Location '#' True True (-1)) : (concat $ map sequenceToLocations sequences)
+      locations = [l { _offset=i } | (i, l) <- zip [0..] locations']
+      counts = initializeCounts locations
+      (lookupS, lookupE) = initializeLookups locations
+      state = SamplingState counts locations lookupS lookupE  
+  --state' <- (runLoggingT (runReaderT (execStateT (evalRandT (forM_ [1..iterations] sample) gen') state) defaultParams) (\x -> putStrLn (discardSeverity x)))
+  return ()
+  
 
 main :: IO ()
 main = do
-  ps <- unwrapRecord "Type-based sampling for models with Dirichlet process priors"
-  words <- (liftM (nub . concat . map words . take (lineCount ps) . lines) . readFile) (input ps)
-  let locations' = (Location '#' True True (-1)) : (concat $ map sequenceToLocations words)
-      locations'' = [l { offset=i } | (i, l) <- zip [0..] locations']
-      indices = [i | (l, i) <- zip locations' [0..], static l == False]
-  locations <- randomizeLocations locations''
-  let counts = initializeCounts locations
-      (lookupS, lookupE) = initializeLookups locations
-  (counts', lookupS', lookupE', locations') <- foldM (sample indices) (counts, lookupS, lookupE, locations) [1..iterations ps]
-  return ()
+  args <- unwrapRecord "Type-based sampling for morphological models with Dirichlet process prior on words"
+  case args of
+    Train{..} -> do
+      words <- (liftM (nub . concat . map words . take lineCount . lines) . readFile) training
+      let params = Params alphaParam stopParam
+      state <- train words params iterations
+      writeFile modelOutput (show $ (params, view locations state))
+    Apply{..} -> do
+      words <- (liftM (nub . concat . map words . lines) . readFile) testing
+      (params, modelLocations) <- (liftM read . readFile) modelFile :: IO (Params, Locations Char)
+      ls <- apply modelLocations words
+      writeFile labeledOutput (show ls)
+      return ()

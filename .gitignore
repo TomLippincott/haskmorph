@@ -1,0 +1,6 @@
+*~
+.*
+*cabal
+Setup.hs
+*.txt
+!.gitignore
