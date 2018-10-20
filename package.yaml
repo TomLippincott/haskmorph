@@ -4,32 +4,24 @@ version:             0.1.0.0
 #description:
 homepage:            https://github.com/githubuser/haskmorph#readme
 license:             BSD3
-author:              Author name here
-maintainer:          example@example.com
-copyright:           2018 Author name here
-category:            Web
+author:              Tom Lippincott
+maintainer:          tom@cs.jhu.edu
+copyright:           2018 Tom Lippincott
+category:            NLP
 extra-source-files:
 - README.md
 
 dependencies:
   - base >= 4.7 && < 5
-#  - text >=1.2.2
   - containers >=0.5.10.2
-#  - cereal >=0.5.4.0
-#  - cereal-text >=0.1.0.2
   - optparse-generic >=1.2.2
-#  - zlib >=0.6.1
-#  - bytestring >=0.10.8.1
-#  - sparse-linear-algebra >=0.3.1
-  - vector >=0.12.0.1
-  - vector-shuffling >=1.1
   - random >=1.1
   - exact-combinatorics >=0.2.0.8
   - monad-loops >=0.4.3
   - logging-effect >=1.3.2
   - mtl >=2.2.2
   - MonadRandom >=0.5.1.1
-  - lens >=4.16.1
+  - random-shuffle >=0.0.4
   
 executables:
   haskmorph:
