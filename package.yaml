@@ -1,7 +1,8 @@
 name:                haskmorph
 version:             0.1.0.0
-#synopsis:
-#description:
+synopsis:            Simple unsupervised morphological inference via MCMC
+description:         Implementation of the non-parametric morphological model
+                     described in "Type-based MCMC" (Liang, Jordan, and Klein, 2010).
 homepage:            https://github.com/githubuser/haskmorph#readme
 license:             BSD3
 author:              Tom Lippincott
@@ -22,6 +23,7 @@ dependencies:
   - mtl >=2.2.2
   - MonadRandom >=0.5.1.1
   - random-shuffle >=0.0.4
+  - vector >=0.12.0.1
   
 executables:
   haskmorph:

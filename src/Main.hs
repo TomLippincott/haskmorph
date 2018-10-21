@@ -35,9 +35,11 @@ import Control.Monad.Reader (ReaderT)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Tuple (swap)
 import Control.Monad.Reader
-import Control.Monad.State
+import Control.Monad.State.Strict
 import Control.Monad.Random
 import System.Random.Shuffle (shuffleM)
+import Data.Vector (Vector)
+import qualified Data.Vector as Vector
 
 --
 --   Command-line parsing
@@ -81,15 +83,21 @@ deriving instance Show (Parameters Unwrapped)
 --
 
 type Prob = Double
-type Dist = [Double]
+type Dist = Vector Double
 newtype LogProb = LogProb Double deriving (Show, Read, Eq, Ord, PrintfArg, Fractional)
-newtype LogDist = LogDist [LogProb]
+type LogDist = Vector LogProb
 
 logProb :: Prob -> LogProb
 logProb p = LogProb (logBase 2 p)
 
+logDist :: Dist -> LogDist
+logDist ps = Vector.map logProb ps
+
 prob :: LogProb -> Prob
 prob (LogProb lp) = 2 ** lp
+
+dist :: LogDist -> Dist
+dist lps = Vector.map prob lps
 
 instance Num LogProb where
   (LogProb a) + (LogProb b) = LogProb (l + (logBase 2 v))
@@ -104,25 +112,25 @@ instance Num LogProb where
   signum = undefined
   fromInteger i = LogProb (fromIntegral i)
 
-type Locations a = [Location a]
-type Counts a = Map [a] Int
+type Locations elem = Vector (Location elem)
+type Morph elem = Vector elem
+type Counts elem = Map (Morph elem) Int
 type Site = Int
 
-data Location a = Location { _value :: a
-                           , _morphFinal :: Bool
-                           , _static :: Bool
-                           , _offset :: Int
-                           } deriving (Show, Read)
+data Location elem = Location { _value :: elem
+                              , _morphFinal :: Bool
+                              , _static :: Bool
+                              } deriving (Show, Read)
 
 -- | A "start" lookup points to the boundary *before* the first item, an "end" lookup points to the boundary *of* the last item
-type Lookup a = Map [a] (Set Int)
+type Lookup elem = Map (Morph elem) (Set Int)
 
 -- | A coherent state of boundary assignments, counts, and word start/end lookups
-data SamplingState a = SamplingState { _counts :: Counts a
-                                     , _locations :: Locations a
-                                     , _startLookup :: Lookup a
-                                     , _endLookup :: Lookup a
-                                     } deriving (Show, Read)
+data SamplingState elem = SamplingState { _counts :: Counts elem
+                                        , _locations :: Locations elem
+                                        , _startLookup :: Lookup elem
+                                        , _endLookup :: Lookup elem
+                                        } deriving (Show, Read)
 
 -- | Parameters that are set at training time
 data Params = Params { _alpha :: Double
@@ -139,25 +147,29 @@ instance (MonadLog (WithSeverity String) m) => MonadLog (WithSeverity String) (R
 --   Word-boundary-lookup-related functions
 --
 
+-- | Remove morphs with no associated locations
+cleanLookup :: Lookup elem -> Lookup elem
+cleanLookup = Map.filter (\x -> Set.size x /= 0)
+
 -- | Initialize word lookup from scratch, given sampling state
 initializeLookups :: (Ord a, Show a) => Locations a -> (Lookup a, Lookup a)
-initializeLookups ls = go ls Map.empty Map.empty []
+initializeLookups ls = go ((Vector.toList . Vector.indexed) ls) Map.empty Map.empty []
   where
-    go (l:ls') mS mE w = case _morphFinal l of
-                       False -> go ls' mS mE w'
-                       True -> go ls' (Map.insertWith (Set.union) (reverse w') (Set.singleton $ _offset l - (length w) - 1) mS) (Map.insertWith (Set.union) (reverse w') (Set.singleton $ _offset l) mE) []
+    go ((i, l):ls') mS mE w = case _morphFinal l of
+                                False -> go ls' mS mE w'
+                                True -> go ls' (Map.insertWith (Set.union) (Vector.fromList $ reverse w') (Set.singleton $ i - (length w) - 1) mS) (Map.insertWith (Set.union) (Vector.fromList $ reverse w') (Set.singleton $ i) mE) []
       where
         w' = _value l : w
     go [] mS mE w = (mS, mE)
 
 -- | Compute the start and end lookup updates implied by setting the given sites to positive and negative, based on the two context-words
-computeUpdates :: (Ord elem, Show elem) => Set Int -> Set Int -> [elem] -> [elem] -> (Lookup elem, Lookup elem)
+computeUpdates :: (Ord elem, Show elem) => Set Int -> Set Int -> Morph elem -> Morph elem -> (Lookup elem, Lookup elem)
 computeUpdates pos neg a b = (sUp, eUp)
   where
-    c = a ++ b
-    aLocs = Set.map (\x -> (x - (length a), x)) pos
-    bLocs = Set.map (\x -> (x, x + (length b))) pos
-    cLocs = Set.map (\x -> (x - (length a), x + (length b))) neg
+    c = a Vector.++ b
+    aLocs = Set.map (\x -> (x - (Vector.length a), x)) pos
+    bLocs = Set.map (\x -> (x, x + (Vector.length b))) pos
+    cLocs = Set.map (\x -> (x - (Vector.length a), x + (Vector.length b))) neg
     sUp = Map.fromListWith Set.union [(w, Set.map fst ls) | (w, ls) <- zip [a, b, c] [aLocs, bLocs, cLocs]]
     eUp = Map.fromListWith Set.union [(w, Set.map snd ls) | (w, ls) <- zip [a, b, c] [aLocs, bLocs, cLocs]]
 
@@ -165,56 +177,81 @@ computeUpdates pos neg a b = (sUp, eUp)
 --   Location/Site-related functions
 --
 
-createData :: Params -> [Char] -> Locations Char
-createData Params{..} cs = ls'
+getStatic :: (Ord a) => Locations a -> Set [a]
+getStatic ls = Set.fromList $ unfoldr (\ls'' -> case span (\x -> _static x == False) ls'' of ([], []) -> Nothing
+                                                                                             (w, f:rs) -> Just (map _value (w ++ [f]), rs)
+                                      ) ls'
   where
+    ls' = Vector.toList ls
+    
+createData :: Params -> Vector Char -> Locations Char
+createData Params{..} cs' = ls
+  where
+    cs = Vector.toList cs'
     ws = (if _types == True then nub else id) $ if _spaces == True then words cs else [cs]
-    ls = concat [sequenceToLocations w | w <- ws]
-    ls' = [l { _offset=i } | (i, l) <- zip [0..] ls]
+    ls = Vector.concat [sequenceToLocations w | w <- ws]
+
+randomFlip p g = (v < p, g')
+  where
+    (v, g') = randomR (0.0, 1.0) g
 
 -- | Switch each potential morpheme boundary (i.e. intra-word indices) to True or False
-randomizeLocations :: [Location a] -> StdGen -> ([Location a], StdGen)
-randomizeLocations xs g = (xs', g')
+randomizeLocations :: Double -> Locations elem -> StdGen -> (Locations elem, StdGen)
+randomizeLocations p xs g = (Vector.fromList xs', g')
   where
-    (g', bs) = mapAccumL (\g'' Location{..} -> if _static == True then (g'', True) else swap (random g'' :: (Bool, StdGen))) g xs
-    xs' = [x { _morphFinal=b } | (x, b) <- zip xs bs]
+    (g', bs) = mapAccumL (\g'' Location{..} -> if _static == True then (g'', True) else swap (randomFlip p g'' :: (Bool, StdGen))) g (Vector.toList xs)
+    xs' = [x { _morphFinal=b } | (x, b) <- zip (Vector.toList xs) bs]
 
+updateLocations :: elem -> Locations elem -> Set Int -> Set Int -> Locations elem
+updateLocations a ls pos neg = Vector.update ls updates
+  where
+    p = Location a True False
+    n = Location a False False
+    pos' = (Vector.map (\i -> (i, p)) . Vector.fromList . Set.toList) pos
+    neg' = (Vector.map (\i -> (i, n)) . Vector.fromList . Set.toList) neg
+    updates = pos' Vector.++ neg'
+    
 -- | Pretty-print a sequence of locations
-showLocations :: [Location Char] -> [Char]
+showLocations :: Locations Char -> [Char]
 showLocations ls = unlines [concat toks, concat indices]
   where
-    toks = map (\x -> if _morphFinal x && _static x then [_value x, '+', ' '] else if _morphFinal x then [_value x, '|', ' '] else [_value x, ' ', ' ']) ls    
-    indices = [printf "%3d" (_offset l) | l <- ls]
+    --spacing = 
+    toks = Vector.toList $ Vector.map (\x -> if _morphFinal x && _static x then [_value x, '+', ' '] else if _morphFinal x then [_value x, '|', ' '] else [_value x, ' ', ' ']) ls    
+    indices = [printf "%3d" i | i <- [0..Vector.length ls]]
 
 -- | Turn a sequence of values into a sequence of locations
-sequenceToLocations :: [a] -> [Location a]
-sequenceToLocations xs = nonFinal ++ [final]
+sequenceToLocations :: [elem] -> Locations elem
+sequenceToLocations xs = Vector.fromList $ nonFinal ++ [final]
   where
     xs' = init xs
-    nonFinal = map (\x -> Location x False False (-1)) xs'
+    nonFinal = map (\x -> Location x False False) xs'
     x = last xs
-    final = Location x True True (-1)
+    final = Location x True True
 
 -- | Find the two words implied by a boundary at the given site
-siteToWords :: (Show a) => Locations a -> Int -> ([a], [a])
-siteToWords ls s = (map _value (reverse (b':aPref)), map _value b)
-  where
-    (before, after) = splitAt (s + 1) ls
-    (bPref, bRem) = break _morphFinal after
-    (b':before') = reverse before
-    (aPref, aRem) = break _morphFinal before'
-    b = case bRem of [] -> bPref
-                     (c:_) -> bPref ++ [c]
+siteToWords :: (Show elem, MonadLog (WithSeverity String) m) => Locations elem -> Int -> m (Morph elem, Morph elem)
+siteToWords ls s = do
+  logDebug (printf "Finding words for site %d" s)
+  let (before, after) = Vector.splitAt (s + 1) ls
+      (bPref, bRem) = Vector.break _morphFinal after
+      (b', before') = Vector.splitAt 1 (Vector.reverse before)
+      (aPref, aRem) = Vector.break _morphFinal before'
+      b = case Vector.length bRem of 0 -> bPref
+                                     _ -> bPref Vector.++ (Vector.fromList [Vector.head bRem])
+      (before'', after'') = (Vector.map _value (Vector.reverse (b' Vector.++ aPref)), Vector.map _value b)
+  logDebug (printf "Found words %s and %s" (show before'') (show after''))
+  return (before'', after'')
+  
 
 -- | For two words, return all compatible sites
-wordsToSites :: (MonadLog (WithSeverity String) m) => (Ord a) => Lookup a -> Lookup a -> [a] -> [a] -> m (Set Int, Set Int)
+wordsToSites :: (MonadLog (WithSeverity String) m) => (Ord elem) => Lookup elem -> Lookup elem -> Morph elem -> Morph elem -> m (Set Int, Set Int)
 wordsToSites luS luE a b = do
-  let j = a ++ b
-      jS = map (\x -> x + (length a)) (Set.toList $ Map.findWithDefault Set.empty j luS)
+  let j = a Vector.++ b
+      jS = Vector.fromList $ map (\x -> x + (Vector.length a)) (Set.toList $ Map.findWithDefault Set.empty j luS)
       aE = Map.findWithDefault Set.empty a luE
       bS = Map.findWithDefault Set.empty b luS
       splits = Set.intersection aE bS
-  return (Set.fromList jS, splits)
+  return ((Set.fromList . Vector.toList) jS, splits)
 
 --
 --   Sampling-distribution-related functions
@@ -222,14 +259,14 @@ wordsToSites luS luE a b = do
 
 -- | Sample a value from a log-categorical distribution
 categorical :: (MonadRandom m) => LogDist -> m Int
-categorical (LogDist lps) = do
-  let ps = scanl (+) (logProb 0.0) lps
-      ps' = map prob ps
-  v <- getRandomR (0.0, last ps' :: Double)
-  return (length (takeWhile (\x -> x < v) ps') - 1)
+categorical lps = do
+  let ps = Vector.scanl (+) (logProb 0.0) lps
+      ps' = Vector.map prob ps
+  v <- getRandomR (0.0, Vector.last ps' :: Double)
+  return (Vector.length (Vector.takeWhile (\x -> x < v) ps') - 1)
 
 -- | Compute the log-probability of generating the given word n times, based on counts
-oneWordProb :: (Show a, Ord a) => Counts a -> Double -> Double -> Int -> [a] -> LogProb
+oneWordProb :: (Show elem, Ord elem) => Counts elem -> Double -> Double -> Int -> Morph elem -> LogProb
 oneWordProb counts stopProb alpha n word = LogProb (numer / denom)
   where
     mu = ((1.0 - stopProb) ^ (length word)) * stopProb
@@ -239,17 +276,17 @@ oneWordProb counts stopProb alpha n word = LogProb (numer / denom)
     denom = (alpha + total) ^ n    
 
 -- | Compute the log-probability of setting a single set of m sites, out of n, to positive
-g :: (Ord a, Show a) => Counts a -> Double -> [a] -> [a] -> Double -> Int -> Int -> LogProb
+g :: (Ord elem, Show elem) => Counts elem -> Double -> Morph elem -> Morph elem -> Double -> Int -> Int -> LogProb
 g counts stopProb before after alpha n m= posProb * negProb
   where
     beforeProb = oneWordProb counts stopProb alpha m before
     afterProb = oneWordProb counts stopProb alpha m after
     posProb = beforeProb * afterProb
-    negProb = oneWordProb counts stopProb alpha (n - m) (before ++ after)
+    negProb = oneWordProb counts stopProb alpha (n - m) (before Vector.++ after)
 
 -- | Compute the log-categorical distribution of possible number of sites to set to positive
-dist :: (Show a, Ord a) => Counts a -> Double -> [a] -> [a] -> Double -> Int -> LogDist
-dist counts stopProb before after alpha n = LogDist unScaled
+distribution :: (Show elem, Ord elem) => Counts elem -> Double -> Morph elem -> Morph elem -> Double -> Int -> LogDist
+distribution counts stopProb before after alpha n = Vector.fromList unScaled
   where
     combinations = [(n `choose` m) | m <- [0..n]]
     gs = [g counts stopProb before after alpha n m | m <- [0..n]]
@@ -260,20 +297,21 @@ dist counts stopProb before after alpha n = LogDist unScaled
 --
 
 -- | Remove zero-elements from a count object
-clean = Map.filter (\x -> Set.size x /= 0)
+cleanCounts :: Counts elem -> Counts elem
+cleanCounts = Map.filter (\x -> x /= 0)
 
 -- | Initialize word counts from scratch, given boundary assignments
-initializeCounts :: (Ord a, Show a) => Locations a -> Counts a
-initializeCounts ls = Map.fromListWith (+) (map (\x -> (x, 1)) words')
+initializeCounts :: (Ord elem, Show elem) => Locations elem -> Counts elem
+initializeCounts ls = Map.fromListWith (+) (Vector.toList (Vector.map (\x -> (x, 1)) words'))
   where
-    words = unfoldr (\xs -> case span (\x -> _morphFinal x == False) xs of
-                              ([], []) -> Nothing
-                              (xs', x:ys) -> Just (xs' ++ [x], ys)
-                    ) ls
-    words' = map (map _value) words
+    words = Vector.unfoldr (\xs -> case span (\x -> _morphFinal x == False) xs of
+                               ([], []) -> Nothing
+                               (xs', x:ys) -> Just (xs' ++ [x], ys)
+                           ) (Vector.toList ls)
+    words' = Vector.map (Vector.fromList . map _value) words
 
 -- | Use provided function to update counts for a word
-updateCounts :: (Ord elem) => (Int -> Int -> Int) -> [elem] -> Int -> Counts elem -> Counts elem
+updateCounts :: (Ord elem) => (Int -> Int -> Int) -> Morph elem -> Int -> Counts elem -> Counts elem
 updateCounts f w n = Map.insertWith f w n
 
 -- | Convenience function for adding counts
@@ -291,12 +329,12 @@ sampleSite :: (MonadIO m, MonadLog (WithSeverity String) m, MonadRandom m, Monad
 sampleSite ix = do
   Params{..} <- ask
   SamplingState{..} <- get
+  --logDebug (printf "%s" (showLocations _locations))
   logDebug (printf "%d sites remaining" (Set.size ix))
-  i <- (liftM (Set.toList ix !!) (getRandomR (0, Set.size ix - 1)))
+  i <- uniform ix
   logDebug (printf "Chose site %d" i)
-  (a, b) <- liftM (siteToWords _locations) (return i)
-  logDebug (printf "Between potential morphs %s and %s" a b)
-  let c = a ++ b
+  (a, b) <- siteToWords _locations i
+  let c = a Vector.++ b
   (fullSites', splitSites') <- wordsToSites _startLookup _endLookup a b
   let fullSites = Set.intersection fullSites' ix
       splitSites = Set.intersection splitSites' ix
@@ -304,7 +342,7 @@ sampleSite ix = do
       nSplit = Set.size splitSites
       nFull = Set.size fullSites
       cs' = (subtractCounts c nFull . subtractCounts a nSplit . subtractCounts b nSplit) _counts
-      d = (dist cs' _stop a b _alpha (Set.size sites))
+      d = (distribution cs' _stop a b _alpha (Set.size sites))
   logDebug (printf "%d split, %d unsplit non-conflicting sites" nSplit nFull)
   numPos <- categorical d
   sites' <- shuffleM (Set.toList sites)
@@ -315,13 +353,13 @@ sampleSite ix = do
       nNeg = length neg
       cs'' = (addCounts c nNeg . addCounts a nPos . addCounts b nPos) cs'
       cs''' = Map.fromList $ [(k, v) | (k, v) <- Map.toList cs'', v /= 0]
-      locations' = [Location {_value=_value, _morphFinal=if _offset `Set.member` pos' then True else if _offset `Set.member` neg' then False else _morphFinal, _static=_static, _offset=_offset} | Location{..} <- _locations]
+      locations' = updateLocations (_value (_locations Vector.! i)) _locations pos' neg'
       (upS, upE) = computeUpdates splitSites fullSites a b
-      luS' = clean $ Map.unionWith (Set.\\) _startLookup upS
-      luE' = clean $ Map.unionWith (Set.\\) _endLookup upE      
+      luS' = Map.unionWith (Set.\\) _startLookup upS
+      luE' = Map.unionWith (Set.\\) _endLookup upE      
       (upS', upE') = computeUpdates pos' neg' a b
-      luS = clean $ Map.unionWith Set.union luS' upS'
-      luE = clean $ Map.unionWith Set.union luE' upE'      
+      luS = Map.unionWith Set.union luS' upS'
+      luE = Map.unionWith Set.union luE' upE'      
   put $ SamplingState cs''' locations' luS luE
   return $ ix Set.\\ sites
 
@@ -329,10 +367,11 @@ sampleSite ix = do
 sample :: (MonadIO m, MonadRandom m, (MonadReader Params) m, MonadState (SamplingState Char) m, MonadLog (WithSeverity String) m) => Int -> m ()
 sample i = do
   logInfo (printf "Iteration #%d" i)
-  state <- get
+  state@(SamplingState{..}) <- get
   params <- ask
-  let indices = Set.fromList [i | (l, i) <- zip (_locations state) [0..], _static l == False]
+  let indices = Set.fromList [i | (l, i) <- zip ((Vector.toList _locations)) [0..], _static l == False]
   iterateUntilM (\s -> Set.size s == 0) sampleSite indices
+  put $ state { _counts=cleanCounts _counts, _startLookup=cleanLookup _startLookup, _endLookup=cleanLookup _endLookup }
   return ()
 
 --
@@ -340,21 +379,20 @@ sample i = do
 --
 
 -- | Train a model on given data
-train :: (MonadIO m, MonadLog (WithSeverity String) m) => [Char] -> Params -> Int -> StdGen -> m (SamplingState Char)
-train seq params iterations gen = do
-  logNotice "Training model..."
-  let (locations, gen') = randomizeLocations (createData params seq) gen
+train :: (MonadIO m, MonadLog (WithSeverity String) m) => Vector Char -> Double -> Params -> Int -> StdGen -> m (SamplingState Char)
+train seq eta params iterations gen = do
+  let (locations, gen') = randomizeLocations eta (createData params seq) gen
       counts = initializeCounts locations
       (lookupS, lookupE) = initializeLookups locations
       state = SamplingState counts locations lookupS lookupE
+  logNotice (printf "Training model on initial sequence of length %d, final length %d, %d types" (Vector.length seq) (Vector.length locations) (Set.size $ getStatic locations))
   runReaderT (execStateT (evalRandT (forM_ [1..iterations] sample) gen') state) params
 
 -- | Apply the model to given data
-apply :: (MonadIO m, MonadLog (WithSeverity String) m) => Params -> Locations Char -> [Char] -> Int -> StdGen -> m (SamplingState Char)
+apply :: (MonadIO m, MonadLog (WithSeverity String) m) => Params -> Locations Char -> Vector Char -> Int -> StdGen -> m (SamplingState Char)
 apply params model sequence iterations gen = do
   logNotice "Applying model..."
-  let locations' = model ++ (createData params sequence)
-      locations = [l { _offset=i } | (i, l) <- zip [0..] locations']
+  let locations = model Vector.++ (createData params sequence)
       counts = initializeCounts locations
       (lookupS, lookupE) = initializeLookups locations
       state = SamplingState counts locations lookupS lookupE
@@ -370,17 +408,18 @@ main = do
   args <- unwrapRecord "Type-based sampling for morphological models with Dirichlet process prior on words"
   gen <- case randomSeed args of Nothing -> getStdGen
                                  Just i -> return $ mkStdGen i
+  print gen
   let level = logLevels Map.! (fromMaybe "info" (logLevel args))
   runLoggingT (case args of
                   Train{..} -> do
-                    seq <- liftIO $ (liftM (concat . (case lineCount of Nothing -> id; Just lc -> take lc) . lines) . readFile) input
+                    seq <- liftIO $ (liftM (Vector.fromList . concat . (case lineCount of Nothing -> id; Just lc -> take lc) . lines) . readFile) input
                     let params = Params (fromMaybe 0.1 alphaParam) (fromMaybe 0.5 sharpParam) useSpaces typeBased
-                    state <- train seq params iterations gen
+                    state <- train seq (fromMaybe 1.0 etaParam) params iterations gen
                     liftIO $ writeFile model (show $ (params, _locations state))
                   Apply{..} -> do
-                    seq <- liftIO $ (liftM (concat . (case lineCount of Nothing -> id; Just lc -> take lc) . lines) . readFile) input
+                    seq <- liftIO $ (liftM (Vector.fromList . concat . (case lineCount of Nothing -> id; Just lc -> take lc) . lines) . readFile) input
                     (params :: Params, modelLocations :: Locations Char) <- (liftIO $ (liftM read . readFile) model)
-                    ls <- apply params [x {_static=True } | x <- modelLocations] seq iterations gen
+                    ls <- apply params (Vector.fromList [x {_static=True } | x <- Vector.toList modelLocations]) seq iterations gen
                     liftIO $ writeFile labeled (show ls)) (\msg -> case msgSeverity msg <= level of
                                                               True -> putStrLn (discardSeverity msg)
                                                               False -> return ()
