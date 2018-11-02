@@ -12,6 +12,7 @@ category:            NLP
 extra-source-files:
 - README.md
 
+
 dependencies:
   - base >= 4.7 && < 5
   - containers >=0.5.10.2
@@ -24,8 +25,15 @@ dependencies:
   - MonadRandom >=0.5.1.1
   - random-shuffle >=0.0.4
   - vector >=0.12.0.1
+  - ansi-terminal >=0.8.0.4
   
+library:
+  source-dirs: src
+
+#ghc-options: -rtsopts  
 executables:
   haskmorph:
-    source-dirs:      src
+    dependencies:
+      - haskmorph
+    source-dirs:      app
     main:             Main.hs
