@@ -4,3 +4,4 @@
 Setup.hs
 *.txt
 !.gitignore
+*gz

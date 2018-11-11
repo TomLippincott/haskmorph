@@ -1,9 +1,9 @@
-name:                haskmorph
+name:                haskseg
 version:             0.1.0.0
-synopsis:            Simple unsupervised morphological inference via MCMC
-description:         Implementation of the non-parametric morphological model
+synopsis:            Simple unsupervised segmentation model
+description:         Implementation of the non-parametric segmentation model
                      described in "Type-based MCMC" (Liang, Jordan, and Klein, 2010).
-homepage:            https://github.com/githubuser/haskmorph#readme
+homepage:            https://github.com/githubuser/haskseg#readme
 license:             BSD3
 author:              Tom Lippincott
 maintainer:          tom@cs.jhu.edu
@@ -11,8 +11,13 @@ copyright:           2018 Tom Lippincott
 category:            NLP
 extra-source-files:
 - README.md
+default-extensions:
+  - Strict
+  - StrictData
+  - FlexibleContexts
+  - RecordWildCards
 
-
+  
 dependencies:
   - base >= 4.7 && < 5
   - containers >=0.5.10.2
@@ -26,14 +31,18 @@ dependencies:
   - random-shuffle >=0.0.4
   - vector >=0.12.0.1
   - ansi-terminal >=0.8.0.4
+  - zlib >=0.6.1
+  - bytestring >=0.10.8.1
+  - text >=1.2.2
+
   
 library:
   source-dirs: src
 
 #ghc-options: -rtsopts  
 executables:
-  haskmorph:
+  haskseg:
     dependencies:
-      - haskmorph
+      - haskseg
     source-dirs:      app
     main:             Main.hs
