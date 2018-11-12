@@ -17,8 +17,6 @@ import qualified Data.Sequence as Seq
 import Data.Foldable
   
 type Locations elem = Vector (Location elem)
---fromList = id
---type Locations elem = [Location elem]
 type Morph elem = Vector elem
 type Counts elem = Map (Morph elem) Int
 type Site = Int

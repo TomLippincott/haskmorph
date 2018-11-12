@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-module Text.HaskSeg.Probability (Prob, LogProb, showDist, Probability(..), sampleCategorical) where
+module Text.HaskSeg.Probability (Prob, LogProb, showDist, Probability(..), sampleCategorical, Categorical) where
 
 import Data.List (unfoldr, nub, mapAccumL, intercalate, sort)
 import Data.Vector (Vector)
