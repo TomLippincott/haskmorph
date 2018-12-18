@@ -41,7 +41,7 @@ import qualified System.Console.ANSI as A
 import Text.HaskSeg.Probability (Prob, LogProb, Probability(..), showDist, sampleCategorical)
 import Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..))
 import Text.HaskSeg.Metrics (f1)
-import Text.HaskSeg.Utils (readModel, writeModel, readDataset, writeDataset, readVocabulary, writeVocabulary)
+import Text.HaskSeg.Utils (readDataset, writeDataset) --, readVocabulary, writeVocabulary)
 import Text.HaskSeg.Location (randomFlip, createData, randomizeLocations, updateLocations, nonConflicting, wordsToSites, siteToWords, updateLocations')
 import Text.HaskSeg.Lookup (cleanLookup, initializeLookups, computeUpdates)
 import Text.HaskSeg.Counts (cleanCounts, initializeCounts, updateCounts, addCounts, subtractCounts)

@@ -11,12 +11,16 @@ copyright:           2018 Tom Lippincott
 category:            NLP
 extra-source-files:
 - README.md
+
 default-extensions:
   - Strict
   - StrictData
   - FlexibleContexts
   - RecordWildCards
-
+  - MultiParamTypeClasses
+  - FlexibleInstances
+  - OverloadedStrings
+  - ScopedTypeVariables
   
 dependencies:
   - base >= 4.7 && < 5
@@ -34,12 +38,10 @@ dependencies:
   - zlib >=0.6.1
   - bytestring >=0.10.8.1
   - text >=1.2.2
-
-  
+  - array
 library:
   source-dirs: src
 
-#ghc-options: -rtsopts  
 executables:
   haskseg:
     dependencies:

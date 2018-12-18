@@ -1,8 +1,4 @@
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE FlexibleInstances #-}
-
-
-module Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..)) where
+module Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..), Model, Token, Sentence, Dataset, Filename, Vocabulary, Segmentation) where
 
 import Data.List (unfoldr, nub, mapAccumL, intercalate, sort)
 import Data.Map (Map)
@@ -12,14 +8,24 @@ import qualified Data.Set as Set
 import Text.Printf (printf, PrintfArg(..), fmtPrecision, fmtChar, errorBadFormat, formatString, vFmt, IsChar)
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
-import Data.Sequence (Seq)
-import qualified Data.Sequence as Seq
-import Data.Foldable
-  
+import Data.Foldable (toList)
+import Text.HaskSeg.Probability (Probability)
+
+type Token = String
+type Sentence = [Token]
+type Dataset = [Sentence]
+type Filename = String
+type Vocabulary = Set Token
+type Segmentation = Map Token [Token]
+
+
+
 type Locations elem = Vector (Location elem)
 type Morph elem = Vector elem
 type Counts elem = Map (Morph elem) Int
 type Site = Int
+
+type Model elem p = Map [elem] p
 
 data Location elem = Location { _value :: !elem
                               , _morphFinal :: !Bool
@@ -69,4 +75,3 @@ instance PrintfArg (Set Int) where
 instance (Show elem) => PrintfArg (Vector elem) where
   formatArg is fmt | fmtChar (vFmt 'P' fmt) == 'P' = formatString (intercalate ", " ((map show . Vector.toList) is)) (fmt { fmtChar = 's', fmtPrecision = Nothing })
   formatArg _ fmt = errorBadFormat $ fmtChar fmt
-
