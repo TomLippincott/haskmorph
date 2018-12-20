@@ -1,4 +1,4 @@
-module Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..), Model, Token, Sentence, Dataset, Filename, Vocabulary, Segmentation) where
+module Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..), Model, Token, Sentence, Dataset, Filename, Vocabulary, Segmentation, ReverseLookup) where
 
 import Data.List (unfoldr, nub, mapAccumL, intercalate, sort)
 import Data.Map (Map)
@@ -35,6 +35,8 @@ data Location elem = Location { _value :: !elem
 -- | A "start" lookup points to the boundary *before* the first item, an "end" lookup points to the boundary *of* the last item
 type Lookup elem = Map (Morph elem) (Set Int)
 
+type ReverseLookup elem = Map Int (Morph elem, Morph elem)
+
 showLookup :: (PrintfArg elem, IsChar elem) => Lookup elem -> String
 showLookup lu = intercalate ", " [printf "\"%v\"=[%v]" (toList k) v | (k, v) <- Map.toList lu]
 
@@ -46,6 +48,7 @@ data SamplingState elem = SamplingState { _counts :: !(Counts elem)
                                         , _locations :: !(Locations elem)
                                         , _startLookup :: !(Lookup elem)
                                         , _endLookup :: !(Lookup elem)
+                                        , _wordsLookup :: !(ReverseLookup elem)
                                         , _toSample :: !(Set Int)
                                         } deriving (Show, Read)
 

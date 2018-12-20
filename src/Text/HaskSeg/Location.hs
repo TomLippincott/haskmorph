@@ -6,11 +6,12 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ExplicitNamespaces #-}
 
-module Text.HaskSeg.Location (randomFlip, createData, randomizeLocations, updateLocations, updateLocations', nonConflicting, wordsToSites, siteToWords, formatWord, showLexicon) where
+module Text.HaskSeg.Location (randomFlip, createData, randomizeLocations, updateLocations, updateLocations', nonConflicting, wordsToSites, siteToWords, formatWord, showLexicon, initReverseLookup) where
 
 import Control.Monad.Random
 import Data.Set (Set)
 import qualified Data.Set as Set
+import qualified Data.Maybe as Maybe
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Vector (Vector)
@@ -24,13 +25,14 @@ import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Monad.State.Strict
 import Data.Tuple (swap)
 import Data.List (unfoldr, nub, mapAccumL, intercalate, sort, foldl1')
-
 import Text.HaskSeg.Probability (Prob, LogProb, Probability(..), showDist, sampleCategorical)
 import Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..))
+import Debug.Trace (traceShowId)
 
 randomFlip p g = (v < p, g')
   where
     (v, g') = randomR (0.0, 1.0) g
+
 
 createData :: (Probability p, MonadLog (WithSeverity String) m) => (Params p) -> Vector Char -> m (Locations Char, Set Int)
 createData Params{..} cs' = do
@@ -47,6 +49,7 @@ createData Params{..} cs' = do
   logInfo (printf "Loaded data set of %d characters/%d words" (length cs) (length ws))
   return $! (ws'', Set.fromList bs')
 
+
 formatWord :: [Location Char] -> String
 formatWord ls = printf "%s : %s" word (intercalate "@@" (reverse (morphs ls [])))
   where
@@ -56,6 +59,7 @@ formatWord ls = printf "%s : %s" word (intercalate "@@" (reverse (morphs ls []))
       where
         (pref, r:rem) = span (\x -> _morphFinal x == False) ls'
         morph = map _value (pref ++ [r]) 
+
 
 showLexicon :: Locations Char -> [String]
 showLexicon ls = go [] (Vector.toList ls)
@@ -74,6 +78,7 @@ randomizeLocations p xs g = (Vector.fromList xs', g')
     (g', bs) = mapAccumL (\g'' Location{..} -> if _static == True then (g'', True) else swap (randomFlip p g'' :: (Bool, StdGen))) g (Vector.toList xs)
     xs' = [x { _morphFinal=b } | (x, b) <- zip (Vector.toList xs) bs]
 
+
 updateLocations' :: elem -> Locations elem -> Set Int -> Set Int -> Locations elem
 updateLocations' a ls pos neg = Vector.update ls updates
   where
@@ -82,6 +87,7 @@ updateLocations' a ls pos neg = Vector.update ls updates
     pos' = (Vector.map (\i -> (i, p)) . Vector.fromList . Set.toList) pos
     neg' = (Vector.map (\i -> (i, n)) . Vector.fromList . Set.toList) neg
     updates = pos' Vector.++ neg'
+
 
 updateLocations :: (MonadState (SamplingState elem) m) => elem -> Set Int -> Set Int -> m ()
 updateLocations a pos neg = do
@@ -93,6 +99,7 @@ updateLocations a pos neg = do
       updates = pos' Vector.++ neg'
   modify' (\state -> state)
     
+
 -- | Turn a sequence of values into a sequence of locations
 sequenceToLocations :: [elem] -> Locations elem
 sequenceToLocations xs = Vector.fromList $ nonFinal ++ [final]
@@ -102,17 +109,50 @@ sequenceToLocations xs = Vector.fromList $ nonFinal ++ [final]
     x = last xs
     final = Location x True True
 
+
+-- -- | Find the two words implied by a boundary at the given site
+-- siteToWords :: (Show elem, MonadLog (WithSeverity String) m) => Locations elem -> Int -> m (Morph elem, Morph elem)
+-- siteToWords ls s = do
+--   let (before, after) = Vector.splitAt (s + 1) ls
+--       (bPref, bRem) = Vector.break _morphFinal after
+--       (b', before') = Vector.splitAt 1 (Vector.reverse before)
+--       (aPref, aRem) = Vector.break _morphFinal before'
+--       b = case Vector.length bRem of 0 -> bPref
+--                                      _ -> bPref Vector.++ (Vector.fromList [Vector.head bRem])
+--       (before'', after'') = (Vector.map _value (Vector.reverse (b' Vector.++ aPref)), Vector.map _value b)
+--   return $! (before'', after'')
+
+-- initReverseLookup :: Locations elem -> Map Int (Morph elem, Morph elem)
+-- initReverseLookup ls = Map.fromList ls'
+--   where
+--     items = Vector.map _value ls
+--     starts = Vector.toList $ Vector.findIndices _morphFinal ls
+--     ends = (drop 1 starts) ++ [Vector.length ls]
+--     spans = zip starts ends
+    
+--     dummy = Vector.fromList []
+--     ls' = map (\i -> (i, (dummy, dummy))) [0..Vector.length ls]
+
+initReverseLookup :: (Eq elem) => Lookup elem -> Lookup elem -> Map Int (Morph elem, Morph elem)
+initReverseLookup s e = Map.fromList [(i, (Maybe.fromJust a, Maybe.fromJust b)) | (i, (a, b)) <- atBoundaries ++ atNonBoundaries, a /= Nothing && b /= Nothing]
+  where
+    e' = Map.fromList $ concat [[(v', k) | v' <- Set.toList v] | (k, v) <- Map.toList e]
+    s' = Map.fromList $ concat [[(v', k) | v' <- Set.toList v] | (k, v) <- Map.toList s]
+    indices = Map.keys s'
+    atBoundaries = [(i, (e' Map.!? (i), s' Map.!? i)) | i <- indices]
+    atNonBoundaries = concat $ [[(i + i', (Just $ Vector.slice 0 i' m, Just $ Vector.slice i' (Vector.length m - i') m)) | i' <- [1..Vector.length m - 1]] | (i, m) <- map (\i -> (i, s' Map.! i)) (Map.keys s')]
+
+
 -- | Find the two words implied by a boundary at the given site
-siteToWords' :: (Show elem, MonadLog (WithSeverity String) m) => Locations elem -> Int -> m (Morph elem, Morph elem)
-siteToWords' ls s = do
-  let (before, after) = Vector.splitAt (s + 1) ls
-      (bPref, bRem) = Vector.break _morphFinal after
-      (b', before') = Vector.splitAt 1 (Vector.reverse before)
-      (aPref, aRem) = Vector.break _morphFinal before'
-      b = case Vector.length bRem of 0 -> bPref
-                                     _ -> bPref Vector.++ (Vector.fromList [Vector.head bRem])
-      (before'', after'') = (Vector.map _value (Vector.reverse (b' Vector.++ aPref)), Vector.map _value b)
-  return $! (before'', after'')
+siteToWords' :: (Show elem, MonadLog (WithSeverity String) m, MonadState (SamplingState elem) m) => Int -> m (Morph elem, Morph elem)
+siteToWords' s = do
+  SamplingState{..} <- get
+  let (a, b) = _wordsLookup Map.! s
+  --(a', b') <- siteToWords' s
+  --logInfo (show ((a, b), (a', b')))
+  
+  return (a, b)
+
 
 -- | Find the two words implied by a boundary at the given site
 siteToWords :: (Show elem, MonadLog (WithSeverity String) m, MonadState (SamplingState elem) m) => Int -> m (Morph elem, Morph elem)
@@ -143,7 +183,8 @@ nonConflicting piv@(pivi, (si1, si2)) a b = return $! (a'', b'')
     (mods', b') = Set.foldl' reducer (mods, Set.empty) b
     a'' = if piv `Set.member` a then pivi `Set.insert` a' else a'
     b'' = if piv `Set.member` b then pivi `Set.insert` b' else b'
-    
+
+  
 -- | For two words, return all compatible sites
 wordsToSites :: (Probability p, MonadState (SamplingState elem) m, MonadReader (Params p) m, MonadLog (WithSeverity String) m, Show elem, Ord elem, PrintfArg elem) => Int -> Lookup elem -> Lookup elem -> Morph elem -> Morph elem -> m (Set Int, Set Int)
 wordsToSites piv luS luE a b = do

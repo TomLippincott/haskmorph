@@ -45,7 +45,7 @@ initializeLookups ls = go ((Vector.toList . Vector.indexed) ls) Map.empty Map.em
     go [] mS mE w = (mS, mE)
 
 -- | Compute the start and end lookup updates implied by setting the given sites to positive and negative, based on the two context-words
-computeUpdates :: (Ord elem, Show elem) => Set Int -> Set Int -> Morph elem -> Morph elem -> (Lookup elem, Lookup elem)
+computeUpdates :: (Ord elem, Show elem) => Set Int -> Set Int -> Morph elem -> Morph elem -> (Lookup elem, Lookup elem) -- , [(Int, (Morph elem, Morph elem))])
 computeUpdates pos neg a b = (sUp, eUp)
   where
     c = a Vector.++ b

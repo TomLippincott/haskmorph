@@ -39,7 +39,7 @@ import Text.HaskSeg.Probability (Prob, LogProb, Probability(..), Categorical(..)
 import Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..), Model(..))
 import Text.HaskSeg.Metrics (f1)
 import Text.HaskSeg.Utils (readState, readDataset, writeDataset, writeState, datasetToVocabulary, applySegmentation)
-import Text.HaskSeg.Location (randomFlip, createData, randomizeLocations, updateLocations, nonConflicting, wordsToSites, siteToWords, updateLocations', formatWord, showLexicon)
+import Text.HaskSeg.Location (randomFlip, createData, randomizeLocations, updateLocations, nonConflicting, wordsToSites, siteToWords, updateLocations', formatWord, showLexicon, initReverseLookup)
 import Text.HaskSeg.Lookup (cleanLookup, initializeLookups, computeUpdates)
 import Text.HaskSeg.Counts (cleanCounts, initializeCounts, updateCounts, addCounts, subtractCounts)
 import Text.HaskSeg.Logging (showFullState)
@@ -92,16 +92,19 @@ instance (MonadLog (WithSeverity String) m) => MonadLog (WithSeverity String) (R
 trainModel :: (Categorical p, Show p, Probability p, MonadIO m, MonadLog (WithSeverity String) m) => Vector Char -> Double -> (Params p) -> Int -> StdGen -> m (SamplingState Char)
 trainModel seq eta params iterations gen = do
   logInfo (printf "Initial random seed: %v" (show gen))
-  (locations, gold) <- createData params seq  
+  (locations, gold) <- createData params seq
+
   let numChars = (length . nub . map (\x -> _value x) . Vector.toList) locations
       charProb = fromDouble $ 1.0 / (fromIntegral numChars)
       (locations', gen') = randomizeLocations eta locations gen
       counts = initializeCounts locations'
       (lookupS, lookupE) = initializeLookups locations'
-      state = SamplingState counts locations' lookupS lookupE Set.empty
+  --logInfo (show (lookupS, lookupE))
+  let rLookup = initReverseLookup lookupS lookupE
+  --logInfo (show rLookup)
+  let state = SamplingState counts locations' lookupS lookupE rLookup Set.empty
       params' = params { _gold=gold, _charProb=charProb }
   runReaderT (execStateT (evalRandT (forM_ [1..iterations] sample) gen') state) params'
-
 
 
 --

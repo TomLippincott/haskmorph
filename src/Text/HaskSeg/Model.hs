@@ -21,9 +21,9 @@ import System.Random.Shuffle (shuffleM)
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import Text.HaskSeg.Probability (Prob, LogProb, Probability(..), showDist, sampleCategorical, Categorical)
-import Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..), Vocabulary, Segmentation, Dataset)
+import Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..), Vocabulary, Segmentation, Dataset, ReverseLookup)
 import Text.HaskSeg.Metrics (f1)
-import Text.HaskSeg.Location (randomFlip, createData, randomizeLocations, updateLocations, nonConflicting, wordsToSites, siteToWords, updateLocations')
+import Text.HaskSeg.Location (randomFlip, createData, randomizeLocations, updateLocations, nonConflicting, wordsToSites, siteToWords, updateLocations', initReverseLookup)
 import Text.HaskSeg.Lookup (cleanLookup, initializeLookups, computeUpdates)
 import Text.HaskSeg.Counts (cleanCounts, initializeCounts, updateCounts, addCounts, subtractCounts)
 import Text.HaskSeg.Probability (Prob, LogProb, Probability(..), showDist, sampleCategorical)
@@ -281,7 +281,19 @@ sampleSite ix = do
       (upS', upE') = computeUpdates pos' neg' a b
       luS = cleanLookup $ Map.unionWith Set.union luS' upS'
       luE = cleanLookup $ Map.unionWith Set.union luE' upE'
+      --wordsLookup' = 
       ix' = ix Set.\\ sites
-  put $ SamplingState cs''' locations' luS luE ix'
+      --wordsLookup' = initReverseLookup luS luE
+      --wordsLookup' = updateReverseLookup _wordsLookup pos' neg' a b
+  put $ SamplingState cs''' locations' luS luE _wordsLookup ix'
   return $! ix Set.\\ sites
 
+
+updateReverseLookup :: (Show elem) => ReverseLookup elem -> Set Int -> Set Int -> Vector elem -> Vector elem -> ReverseLookup elem
+updateReverseLookup rlu pos neg a b = rlu
+  where
+    --updates = error (show (pos, neg, a, b))
+    --negPrefUpdates = []
+    --negSuffUpdates = []
+    --posUpdates = []
+    --updates = Map.fromList (posUpdates ++ negPrefUpdates ++ negSuffUpdates)
