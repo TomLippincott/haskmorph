@@ -23,11 +23,11 @@ The first time this runs will take a while, 10 or 15 minutes, as it builds an en
 Invoke the program using Stack.  To see available sub-commands, run:
 
 ```
-stack exec -- haskmorph -h
+stack exec -- haskseg -h
 ```
 
 To see detailed help, run e.g.:
 
 ```
-stack exec -- haskmorph train -h
+stack exec -- haskseg train -h
 ```
