@@ -16,6 +16,7 @@ import Prelude hiding (lookup)
 import Options.Generic (Generic, ParseRecord, Unwrapped, Wrapped, unwrapRecord, (:::), type (<?>)(..))
 import Control.Monad (join, liftM, foldM)
 import System.Random (getStdGen, mkStdGen)
+import System.IO (stderr, hPutStrLn)
 import Data.List (unfoldr, nub, mapAccumL, intercalate, sort, foldl1')
 import Data.Maybe (fromMaybe, catMaybes)
 import Data.Map (Map)
@@ -142,7 +143,7 @@ main = do
                     --liftIO $ print seq
               )
                     (\msg -> case msgSeverity msg <= level of
-                               True -> putStrLn (discardSeverity msg)
+                               True -> hPutStrLn stderr (discardSeverity msg)
                                False -> return ()
                       )
                     

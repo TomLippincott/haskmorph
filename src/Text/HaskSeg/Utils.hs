@@ -54,19 +54,22 @@ writeFileOrStdout Nothing s = hPutStr stdout s
 
 
 readDataset :: Maybe Filename -> Maybe Int -> IO Dataset
-readDataset (Just f) n = do
-  bs <- readFile f
+readDataset mf n = do
+  bs <- case mf of Just f -> readFile f
+                   Nothing -> getContents
   let ls = (map words . (case n of Nothing -> id; Just i -> take i) . lines) bs
   --let ls = (map words . (case n of Nothing -> id; Just i -> take i) . lines . T.unpack . T.decodeUtf8) bs
   return $ map (map unpack) ls
 
+  
 datasetToVocabulary :: Dataset -> Vocabulary
 datasetToVocabulary ss = Set.fromList $ nub ws
   where
     ws = concat ss
 
 writeDataset :: Maybe Filename -> Dataset -> IO ()
-writeDataset (Just f) cs = BS.writeFile f bs
+writeDataset mf cs = case mf of Just f -> BS.writeFile f bs
+                                Nothing -> BS.hPut stdout bs
   where
     bs = (T.encodeUtf8 . T.pack . unlines . map unwords) cs
 
