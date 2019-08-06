@@ -23,11 +23,18 @@ The first time this runs will take a while, 10 or 15 minutes, as it builds an en
 Invoke the program using Stack.  To see available sub-commands, run:
 
 ```
-stack exec -- haskmorph -h
+stack exec -- haskseg -h
 ```
 
 To see detailed help, run e.g.:
 
 ```
-stack exec -- haskmorph train -h
+stack exec -- haskseg train -h
+```
+
+For example, to train a model on the library source and apply it to the application source of this repo:
+
+```
+cat src/Text/Haskseg/*hs|stack exec -- haskseg train --iterations 10 --stateFile state.bin
+cat app/Main.hs|stack exec -- haskseg segment --stateFile state.bin
 ```
