@@ -1,5 +1,5 @@
 name:                haskseg
-version:             0.1.0.0
+version:             0.1.0.2
 synopsis:            Simple unsupervised segmentation model
 description:         >
   Implementation of the non-parametric segmentation model
