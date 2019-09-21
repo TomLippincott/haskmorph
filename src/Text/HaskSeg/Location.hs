@@ -29,25 +29,27 @@ import Text.HaskSeg.Probability (Prob, LogProb, Probability(..), showDist, sampl
 import Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..))
 import Debug.Trace (traceShowId)
 
+
 randomFlip p g = (v < p, g')
   where
     (v, g') = randomR (0.0, 1.0) g
 
 
-createData :: (Probability p, MonadLog (WithSeverity String) m) => (Params p) -> Vector Char -> m (Locations Char, Set Int)
-createData Params{..} cs' = do
-  let cs = Vector.toList cs'
-      ls = lines cs
-      wss = concat $ map words ls
-      wc = Map.fromListWith (\a b -> a + b) (zip wss $ repeat 1)
-      keep = Map.filter (>= _minCount) wc
-      ws = if _types == True then Map.keys keep else concat $ map words ls
-      bs = map length ws
-      bs' = (reverse . drop 1 . reverse . drop 1) $ scanl (+) (-1) bs
-      ws' = if _spaces == True then ws else [concat ws]
-      ws'' = Vector.concat [sequenceToLocations w | w <- ws']
-  logInfo (printf "Loaded data set of %d characters/%d words" (length cs) (length ws))
-  return $! (ws'', Set.fromList bs')
+createData :: (Probability p, MonadLog (WithSeverity String) m) => (Params p) -> Vector (Char, Bool) -> m (Locations Char, Set Int)
+createData = undefined
+-- createData Params{..} cs' = do
+--   let cs = (map fst . Vector.toList) cs'
+--       ls = lines cs
+--       wss = concat $ map words ls
+--       wc = Map.fromListWith (\a b -> a + b) (zip wss $ repeat 1)
+--       keep = Map.filter (>= _minCount) wc
+--       ws = if _types == True then Map.keys keep else concat $ map words ls
+--       bs = map length ws
+--       bs' = (reverse . drop 1 . reverse . drop 1) $ scanl (+) (-1) bs
+--       ws' = if _spaces == True then ws else [concat ws]
+--       ws'' = Vector.concat [sequenceToLocations w | w <- ws']
+--   logInfo (printf "Loaded data set of %d characters" (length cs)) -- (length ws))
+--   return $! (ws'', Set.fromList bs')
 
 
 formatWord :: [Location Char] -> String
@@ -84,8 +86,8 @@ updateLocations' a ls pos neg = Vector.update ls updates
   where
     p = Location a True False
     n = Location a False False
-    pos' = (Vector.map (\i -> (i, p)) . Vector.fromList . Set.toList) pos
-    neg' = (Vector.map (\i -> (i, n)) . Vector.fromList . Set.toList) neg
+    pos' = (Vector.map (\i -> (i, (ls Vector.! i) { _morphFinal=True} )) . Vector.fromList . Set.toList) pos
+    neg' = (Vector.map (\i -> (i, (ls Vector.! i) { _morphFinal=False} )) . Vector.fromList . Set.toList) neg
     updates = pos' Vector.++ neg'
 
 
@@ -101,13 +103,13 @@ updateLocations a pos neg = do
     
 
 -- | Turn a sequence of values into a sequence of locations
-sequenceToLocations :: [elem] -> Locations elem
-sequenceToLocations xs = Vector.fromList $ nonFinal ++ [final]
-  where
-    xs' = init xs
-    nonFinal = map (\x -> Location x False False) xs'
-    x = last xs
-    final = Location x True True
+-- sequenceToLocations :: [elem] -> Locations elem
+-- sequenceToLocations xs = Vector.fromList $ nonFinal ++ [final]
+--   where
+--     xs' = init xs
+--     nonFinal = map (\x -> Location x False False) xs'
+--     x = last xs
+--     final = Location x True True True
 
 
 -- -- | Find the two words implied by a boundary at the given site

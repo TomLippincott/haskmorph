@@ -62,16 +62,21 @@ sample i = do
   ll <- unwrap <$> likelihood
   state <- get
   params <- ask
-  logInfo (printf "\nIteration #%d" i)
-  let indices = Set.fromList [i | (l, i) <- zip ((Vector.toList (_locations state))) [0..], _static l == False]  
+  logInfo (printf "\nIteration #%d, current vocab size %d" i (Map.size $ _counts state))
+  let locs = _locations state
+      indices = Set.fromList [i | (l, i) <- zip ((Vector.toList (_locations state))) [0..], _static l == False]  
   iterateUntilM (\s -> Set.size s == 0) sampleSite indices
   state' <- get
   put $ state' { _counts=cleanCounts (_counts state'), _startLookup=cleanLookup (_startLookup state'), _endLookup=cleanLookup (_endLookup state') }
   ll' <- unwrap <$> likelihood
-  let guesses' = Set.fromList $ Vector.toList $ Vector.findIndices (\x -> _morphFinal x && (not $ _static x)) (_locations state')
-      guesses = Set.fromList $ Vector.toList $ Vector.findIndices (\x -> _morphFinal x && (not $ _static x)) (_locations state)
-      score = f1 guesses (_gold params)
-      score' = f1 guesses' (_gold params)
+  let locs = (filter (\x -> _static x /= True) . Vector.toList) (_locations state)
+      locs' = (filter (\x -> _static x /= True) . Vector.toList) (_locations state')
+      guesses = (map _morphFinal) locs
+      guesses' = (map _morphFinal) locs'
+      golds = (map _goldFinal) locs
+      golds' = (map _goldFinal) locs'
+      score = f1 guesses golds
+      score' = f1 guesses' golds'
   logInfo (printf "Log-likelihood old/new: %.3v/%.3v\tF-Score old/new: %.3f/%.3f" ll ll' score score')
   return $! ()
 
@@ -93,21 +98,18 @@ mapAccumLM' cs f acc (b:bs) = do
   (acc', c) <- f acc b  
   mapAccumLM' (c:cs) f acc' bs
 
-
-applyModel :: (MonadLog (WithSeverity String) m, Probability p, Show p) => Model p Char -> Dataset -> m Dataset
-applyModel model dataSet = do
-  let uniqueWords = (map Vector.fromList . Set.toList . Set.fromList . concat) dataSet
-      segCache = Map.empty :: SegCache p
-  logInfo (printf "Segmenting %d words" (length uniqueWords))
-  (sc, segs) <- mapAccumLM (segment model) segCache uniqueWords
-  let segMap = Map.fromList segs
-  return $ map (map Vector.toList . concat . map (\w -> segMap Map.! (Vector.fromList w))) dataSet
+  
+applyModel :: (MonadLog (WithSeverity String) m, Probability p, Show p) => Model p Char -> [String] -> m String
+applyModel model words = do
+  (sc, segs) <- mapAccumLM (segment model) (Map.empty :: SegCache p) (map Vector.fromList words) --uniqueWords
+  let segs' = concat (map snd segs)
+      segs'' = map Vector.toList segs'
+      segs''' = intercalate " " segs''
+  return segs'''
 
 
 type Table p = Map (Int, Int) p
 type SegCache p = Map (Vector Char) p
-
-
 type DPState prob = (SegCache prob, Table prob, Table Int)
 
 

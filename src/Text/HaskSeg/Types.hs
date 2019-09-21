@@ -1,4 +1,4 @@
-module Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..), Model, Token, Sentence, Dataset, Filename, Vocabulary, Segmentation, ReverseLookup) where
+module Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..), Model, Token, Sentence, Dataset, Filename, Vocabulary, Segmentation, ReverseLookup, Character) where
 
 import Data.List (unfoldr, nub, mapAccumL, intercalate, sort)
 import Data.Map (Map)
@@ -11,15 +11,13 @@ import qualified Data.Vector as Vector
 import Data.Foldable (toList)
 import Text.HaskSeg.Probability (Probability)
 
-type Token = String
+type Character = (Char, Bool)
+type Token = [Character]
 type Sentence = [Token]
-type Dataset = [Sentence]
+type Dataset = [Token] --Sentence]
 type Filename = String
 type Vocabulary = Set Token
 type Segmentation = Map Token [Token]
-
-
-
 type Locations elem = Vector (Location elem)
 type Morph elem = Vector elem
 type Counts elem = Map (Morph elem) Int
@@ -30,6 +28,7 @@ type Model elem p = Map [elem] p
 data Location elem = Location { _value :: !elem
                               , _morphFinal :: !Bool
                               , _static :: !Bool
+                              , _goldFinal :: !Bool
                               } deriving (Show, Read)
 
 -- | A "start" lookup points to the boundary *before* the first item, an "end" lookup points to the boundary *of* the last item
@@ -53,7 +52,9 @@ data SamplingState elem = SamplingState { _counts :: !(Counts elem)
                                         } deriving (Show, Read)
 
 instance Show elem => PrintfArg (SamplingState elem) where
-  formatArg SamplingState{..} fmt | fmtChar (vFmt 'P' fmt) == 'P' = formatString (printf "SamplingState" :: String) (fmt { fmtChar = 's', fmtPrecision = Nothing })
+  formatArg SamplingState{..} fmt | fmtChar (vFmt 'P' fmt) == 'P' = formatString (printf "SamplingState: %v" lcs :: String) (fmt { fmtChar = 's', fmtPrecision = Nothing })
+    where
+      lcs = show _locations
   formatArg _ fmt = errorBadFormat $ fmtChar fmt
   
 -- | Parameters that are set at training time

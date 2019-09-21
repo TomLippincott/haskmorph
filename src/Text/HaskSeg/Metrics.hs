@@ -11,19 +11,25 @@ module Text.HaskSeg.Metrics (precision, recall, f1) where
 import Data.Set (Set)
 import qualified Data.Set as Set
 
-precision :: Set Int -> Set Int -> Double
-precision guesses golds = tp / gs
+precision :: [Bool] -> [Bool] -> Double
+precision guesses golds = numer / denom
   where
-    tp = (fromIntegral . Set.size . Set.intersection guesses) golds
-    gs = (fromIntegral . Set.size) guesses
+    denom = (fromIntegral . length . filter (== True)) guesses
+    numer = (fromIntegral . length . filter (== (True, True))) (zip guesses golds)
+--    tp = (fromIntegral . Set.size . Set.intersection guesses) golds
+--    gs = (fromIntegral . Set.size) guesses
 
-recall :: Set Int -> Set Int -> Double
-recall guesses golds = tp / gs
+recall :: [Bool] -> [Bool] -> Double
+recall guesses golds = numer / denom
   where
-    tp = (fromIntegral . Set.size . Set.intersection guesses) golds
-    gs = (fromIntegral . Set.size) golds
+    denom = (fromIntegral . length . filter (== True)) golds
+    numer = (fromIntegral . length . filter (== (True, True))) (zip guesses golds)    
+--1.0 --tp / gs
+--  where
+--    tp = (fromIntegral . Set.size . Set.intersection guesses) golds
+--    gs = (fromIntegral . Set.size) golds
 
-f1 :: Set Int -> Set Int -> Double
+f1 :: [Bool] -> [Bool] -> Double
 f1 guesses golds = 2.0 * numer / denom
   where
     p = precision guesses golds

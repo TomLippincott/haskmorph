@@ -6,7 +6,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ExplicitNamespaces #-}
 
-module Text.HaskSeg.Utils (readDataset, writeDataset, writeState, readState, datasetToVocabulary, applySegmentation) where
+module Text.HaskSeg.Utils (readDataset, writeDataset, writeState, readState, datasetToVocabulary, applySegmentation, writeFileOrStdout, readFileOrStdin) where
 
 import Prelude hiding (lookup, getContents, readFile, strip, lines, writeFile, words)
 import System.IO (withFile, IOMode(..), stdin, stderr, openFile, stdout, hClose, Handle(..))
@@ -23,17 +23,15 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.List (nub)
+import Data.List (nub, unfoldr, isPrefixOf)
+import Data.Maybe (fromMaybe)
 
 import Codec.Compression.GZip (compress, decompress)
 import Text.HaskSeg.Types (Locations, Morph, Counts, Site, Location(..), Lookup, showLookup, showCounts, SamplingState(..), Params(..), Model, Token, Sentence, Dataset)
 import Text.HaskSeg.Probability (Probability)
 
---type Token = String
---type Sentence = [Token]
---type Dataset = [Sentence]
 type Filename = String
-type Vocabulary = Set Token
+type Vocabulary = [Token]
 type Segmentation = Map Token [Token]
 
 
@@ -53,28 +51,59 @@ writeFileOrStdout (Just f) s = case suf of "gz" -> writeFile f ((pack . BS.unpac
 writeFileOrStdout Nothing s = hPutStr stdout s
 
 
-readDataset :: Maybe Filename -> Maybe Int -> IO Dataset
-readDataset mf n = do
+lineToChars :: String -> Text -> [(Char, Bool)]
+lineToChars g t = t''
+  where
+    t' = unpack t
+    lineToChars' :: String -> Maybe ((Char, Bool), [Char])
+    lineToChars' [] = Nothing
+    lineToChars' (v:i) = Just ((v, g'), i')
+      where
+        g' = (g /= "" && g `isPrefixOf` i) || (i == [])
+        i' = if g' then drop (length g) i else i        
+    t'' = unfoldr lineToChars' t'
+
+lineToLocations :: String -> Text -> [Location Char]
+lineToLocations g t = t''
+  where
+    t' = unpack t
+    lineToChars' :: String -> Maybe (Location Char, [Char])
+    lineToChars' [] = Nothing
+    lineToChars' (v:[]) = Just (Location v True True True, [])
+    lineToChars' (v:i) = Just (Location v False False g', i')
+      where
+        g' = (g /= "" && g `isPrefixOf` i) || (i == [])
+        i' = if g' then drop (length g) i else i        
+    t'' = unfoldr lineToChars' t'
+
+
+readDataset :: Maybe Filename -> Maybe Int -> Maybe String -> IO [[Location Char]]
+readDataset mf n g = do
   bs <- case mf of Just f -> readFile f
-                   Nothing -> getContents
-  let ls = (map words . (case n of Nothing -> id; Just i -> take i) . lines) bs
+                   Nothing -> getContents                   
+  --let ls = (map words . (case n of Nothing -> id; Just i -> take i) . lines) bs
+  let ls = lines bs  
+      g' = fromMaybe "" g
   --let ls = (map words . (case n of Nothing -> id; Just i -> take i) . lines . T.unpack . T.decodeUtf8) bs
-  return $ map (map unpack) ls
+  return $ map (lineToLocations g') ls
 
   
 datasetToVocabulary :: Dataset -> Vocabulary
-datasetToVocabulary ss = Set.fromList $ nub ws
-  where
-    ws = concat ss
+datasetToVocabulary = undefined
+--datasetToVocabulary ss = nub ws
+--  where
+--    ws = concat ss
 
 writeDataset :: Maybe Filename -> Dataset -> IO ()
-writeDataset mf cs = case mf of Just f -> BS.writeFile f bs
-                                Nothing -> BS.hPut stdout bs
-  where
-    bs = (T.encodeUtf8 . T.pack . unlines . map unwords) cs
+writeDataset = undefined
+-- writeDataset mf cs = case mf of Just f -> BS.writeFile f bs
+--                                 Nothing -> BS.hPut stdout bs
+--   where
+--     bs = (T.encodeUtf8 . T.pack . unlines . map unwords) cs
 
 applySegmentation :: Segmentation -> Dataset -> Dataset
-applySegmentation seg ds = map (concat . (map (\w -> Map.findWithDefault [[c] | c <- w] w seg))) ds
+applySegmentation = undefined
+--applySegmentation seg ds = map (concat . (map (\w -> Map.findWithDefault [[c] | c <- w] w seg))) ds
 
 
 --readVocabulary :: Filename -> IO Dataset
