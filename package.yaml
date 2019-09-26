@@ -1,12 +1,12 @@
 name:                haskseg
-version:             0.1.0.2
+version:             0.1.0.3
 synopsis:            Simple unsupervised segmentation model
 description:         >
   Implementation of the non-parametric segmentation model
   described in "Type-based MCMC" (Liang, Jordan, and Klein, 2010)
   and "A Bayesian framework for word segmentation Exploring the effects
   of context" (Goldwater, Griffiths, and Johnson, 2009).
-homepage:            https://github.com/githubuser/haskseg#readme
+homepage:            https://github.com/TomLippincott/haskseg#README.md
 license:             BSD3
 author:              Tom Lippincott
 maintainer:          tom@cs.jhu.edu
